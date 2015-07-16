@@ -25,9 +25,9 @@ show_help() {
 irc_notify() {
   if [ "$1" == "--color" ]; then
     case "$2" in
-      red)     NOTIFYCOLOR=\u000304;;
-      green)   NOTIFYCOLOR=\u000309;;
-      yellow)  NOTIFYCOLOR=\u000308;;
+      red)     NOTIFYCOLOR='\u000304';;
+      green)   NOTIFYCOLOR='\u000309';;
+      yellow)  NOTIFYCOLOR='\u000308';;
     esac
     shift; shift
   fi
@@ -41,7 +41,7 @@ dump_error() {
   MESSAGE="$1 is broken on `hostname`"
   [ $NOTIFY -eq 1 ] && irc_notify --color red "${MESSAGE}. See pidfile for more info."
   [ $NOISE_LEVEL -ge 2 ] && echo "$MESSAGE" | tee -a $PIDFILE
-  echo -e "\nDIAGNOTIC DUMP:" >> $PIDFILE
+  echo -e "\nDIAGNOSTIC DUMP:" >> $PIDFILE
   shift
   for DATA; do
     echo -e "$DATA"
