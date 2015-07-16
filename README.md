@@ -4,28 +4,33 @@ A portable bash script used to delay commands until users are logged off a host
 ## Purpose
 The main intended use for this script in my environment is to schedule a reboot to occur the next time the host is unused, to cause minimal disruption of services. The target environment is a subnet full of lab computers, which see use both from local users, and remote logins. Other uses are certainly possible.
 
-The command vocabulary used was checked for portability across all the enterprise POSIX operating systems I use in production, but the final product hasn't been tested yet. Full compatibility is the goal.
+The command vocabulary used was checked for portability across all the enterprise POSIX operating systems I use in production. Full compatibility is the goal, but testing is ongoing. See "Portability" for details.
 
 ## Usage documentation
+The simplest useful shy command (and one I use often) is probably simply "shy reboot". This will schedule a reboot the next time no users are logged in to the host. After 24 hours, if the command hasn't run yet, it will expire and notify me that it timed out without executing.
+
 Default options are mostly what I find useful in production. Some of the more useful flags and flag combinations are:  
 -c : Asks the script to echo back the command it will run and allow you to confirm before it does its thing.  
 -vvI : Tells the script to run the most verbosely, and without forking a daemon. This is useful for getting info about what the script is seeing, especially if it's failing to execute when it should.  
 -l : (doesn't take a command to run) - Queries the pidfiles on the local host and shows you a list of all currently waiting shy jobs, and what the command they will run is. See "Logging" for more info.  
 -g/-i : Ignores logins from specified or idle users. See "Ignoring users" for some useful semantic info about this flag, and what its absence implies.
 
+Note that due to some of the limitations of the getopt feature set on Solaris, flag parsing can be invasive. Use of the "--" (end of flags) flag is highly recommended if the command to be run also takes flags of its own. Confirm with -c if uncertain.
+
 The unabridged usage documentation from the command is as follows:  
 shy [-qiInvchdl] [-g \<user[,user...]\>] [-t timeout] [--] command  
-  -q -- quiet           decrease verbosity level (default 2, minimum 0)  
-  -v -- verbose         increase verbosity level (maximum 4)  
-  -i -- ignore-idle     disregard logged-in users who have not been active in the last 24 hours  
-  -I -- interactive     don't spawn a detached shy process, instead block calling terminal until execution  
-  -c -- confirm         prompt for confirmation of the payload to be executed as interpreted before going into wait  
-  -n -- no-notify       don't send event notices to irc  
-  -d -- deadline        make the timeout a deadline, not an expiry (execute is forced instead of cancelled)  
+  -q ~ quiet            decrease verbosity level (default 2, minimum 0)  
+  -v ~ verbose          increase verbosity level (maximum 4)  
+  -i ~ ignore-idle      disregard logged-in users who have not been active in the last 24 hours  
+  -I ~ interactive      don't spawn a detached shy process, instead block calling terminal until execution  
+  -c ~ confirm          prompt for confirmation of the payload to be executed as interpreted before going into wait  
+  -n ~ no-notify        don't send event notices to irc  
+  -d ~ deadline         make the timeout a deadline, not an expiry (execute is forced instead of cancelled)  
   -g \<user[,user[...]]\> ignore logins from the specified user (or list of users)  
   -t \<timeout\>          timeout duration (in hours, default 24)  
-  -l -- list            don't execute a command, instead list currently waiting shy commands  
-  -h -- help            print this text
+  -- ~ end-of-flags     stop parsing flags, and begin command payload  
+  -l ~ list             don't execute a command, instead list currently waiting shy commands  
+  -h ~ help             print this text
 
 ## Ignoring users
 The -g and -i flags are used to exclude certain users from consideration when querying for logins.
