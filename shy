@@ -1,0 +1,262 @@
+#!/bin/bash -a
+
+show_help() {
+  cat <<- HELPTEXT
+		Usage: `basename $0` [-qiInvchdl] [-g <user[,user...]>] [-t timeout] [--] command
+		  -q -- quiet           decrease verbosity level (default 2, minimum 0)
+		  -v -- verbose         increase verbosity level (maximum 4)
+		  -i -- ignore-idle     disregard logged-in users who have not been active in the last 24 hours
+		  -I -- interactive     don't spawn a detached `basename $0` process, instead block calling terminal until execution
+		  -c -- confirm         prompt for confirmation of the payload to be executed as interpreted before going into wait
+		  -n -- no-notify       don't send event notices to irc
+		  -d -- deadline        make the timeout a deadline, not an expiry (execute is forced instead of cancelled)
+		  -g <user[,user[...]]> ignore logins from the specified user (or list of users)
+		  -t <timeout>          timeout duration (in hours, default 24)
+		  -l -- list            don't execute a command, instead list currently waiting `basename $0` commands
+		  -h -- help            print this text
+		Examples:
+		  `basename $0` -qqc -- kill -9 \$TARGET_PID
+		    Execute a kill on delay with minimal informational output, and confirm text to be executed now.
+		  `basename $0` -In 'uptime | sed s_.*\(load average.*$\)_\1_'
+		    Check the load average next time there are no other users logged in, with output dumped to terminal.
+	HELPTEXT
+}
+
+irc_notify() {
+  if [ "$1" == "--color" ]; then
+    case "$2" in
+      red)     NOTIFYCOLOR=\u000304;;
+      green)   NOTIFYCOLOR=\u000309;;
+      yellow)  NOTIFYCOLOR=\u000308;;
+    esac
+    shift; shift
+  fi
+
+  eval $NOTIFY_COMMAND $*
+  [ $NOISE_LEVEL -ge 3 ] && echo -e "Notified IRC API with message: $*" | tee -a $PIDFILE
+  return 0
+}
+
+dump_error() {
+  MESSAGE="$1 is broken on `hostname`"
+  [ $NOTIFY -eq 1 ] && irc_notify --color red "${MESSAGE}. See pidfile for more info."
+  [ $NOISE_LEVEL -ge 2 ] && echo "$MESSAGE" | tee -a $PIDFILE
+  echo -e "\nDIAGNOTIC DUMP:" >> $PIDFILE
+  shift
+  for DATA; do
+    echo -e "$DATA"
+    echo ""
+    echo '@@@----------------------------------------------------------------@@@'
+    echo ""
+  done >> $PIDFILE
+  [ $NOISE_LEVEL -ge 2 ] && date >> $PIDFILE
+  [ $NOISE_LEVEL -ge 2 ] && echo "$0 $@" >> $TEMPFILE
+  mv -b $PIDFILE ${PIDFILE_DIR}/$$.errored
+  exit 1
+}
+
+detect_users() {
+  IFS='
+'
+  USERCOUNT=-1
+  IDLE_COLUMN=""
+
+  for LINE in `w -s | tail -n +2`; do
+    if [ "$IGNORE_IDLE" -eq 1 ] && [ -z "$IDLE_COLUMN" ]; then
+      for i in `seq $(echo $LINE | wc -w)`; do
+        if echo $LINE | awk '{ print $'$i' }' | grep -q -i "idle" ; then
+          IDLE_COLUMN=$i
+          break
+        fi
+      done
+      if [ -z "$IDLE_COLUMN" ]; then
+        dump_error "user detection" "parsed as column header line (looking for \"IDLE\" column):\n$LINE" \
+          "raw command output:\n`w -s`"
+      fi
+    else
+      if [ "$IGNORE_IDLE" -eq 1 ]; then
+        IDLE_TIME=`echo $LINE | awk '{ print $'${IDLE_COLUMN}' }'`
+        if ( echo "$IDLE_TIME" | grep -q days ); then
+          continue
+        fi
+      fi
+      if [ $IGNORE_USERS != "," ]; then
+        USER_NAME=`echo $LINE | awk '{ print $1 }'`
+        if echo "$IGNORE_USERS" | grep -q ",${USER_NAME},"; then
+          continue
+        fi
+      fi
+      [ "$NOISE_LEVEL" -ge 4 ] && echo $LINE | tee -a $PIDFILE
+      USERCOUNT=$(( $USERCOUNT + 1 ))
+    fi
+  done
+
+  return $USERCOUNT
+}
+
+list_procs() {
+  if ( ! [ -d $PIDFILE_DIR ] ) || ! ls $PIDFILE_DIR | grep -q running ; then
+    [ $NOISE_LEVEL -ge 2 ] && echo "No `basename $0` processes found waiting."
+  else
+    for FILENAME in `ls $PIDFILE_DIR`; do
+      echo $FILENAME | grep -q running || continue
+      ps -p `echo $FILENAME | sed 's/\([0-9][0-9]*\)\..*/\1/'`
+      echo -n "Command payload: "
+      cat ${PIDFILE_DIR}/${FILENAME} | head -n 1
+      echo
+    done
+  fi
+}
+
+sig_handler() {
+  MESSAGE="`basename $0` process on `hostname` received a lethal signal"
+  [ $NOTIFY -eq 1 ] && irc_notify --color yellow $MESSAGE
+  [ $NOISE_LEVEL -ge 1 ] && echo $MESSAGE | tee -a $PIDFILE
+  mv $PIDFILE ${PIDFILE_DIR}/$$.killed
+  exit 1
+}
+
+
+# Start main section
+
+GETOPT_COMPATIBLE=true
+NOISE_LEVEL=2
+NOTIFY=1
+IGNORE_IDLE=0
+IGNORE_USERS=,
+CONFIRM=0
+DISABLE_CONFIRM=0
+DAEMONIZE=1
+DEADLINE=0
+TIMEOUT=10000
+TIMEOUT_ARG=24
+PIDFILE_DIR=/tmp/`basename $0`.pidfiles
+PIDFILE=/dev/null
+DUMP_STATE=0
+
+set -- ` getopt qiInvcChdDlg:t: $* `
+
+if [ $# -eq 1 ]; then
+  show_help
+  exit 1
+fi
+
+PAYLOAD=`echo "$*" | sed 's/.* -- \(.*\)/\1/'`
+
+for TOKEN; do
+  case $TOKEN in
+    -q)   NOISE_LEVEL=$(( $NOISE_LEVEL - 1 ));;
+    -v)   NOISE_LEVEL=$(( $NOISE_LEVEL + 1 ));;
+    -n)   NOTIFY=0;;
+    -i)   IGNORE_IDLE=1;;
+    -I)   DAEMONIZE=0;;
+    -c)   CONFIRM=1;;
+    -C)   DISABLE_CONFIRM=1;;
+    -d)   DEADLINE=1;;
+    -D)   DUMP_STATE=1;;
+    -l)   list_procs ; exit 0;;
+    -h)   show_help ; exit 0;;
+    --)   break;;
+  esac
+done
+
+PARAMS="$@"
+
+while [ "$1" != "--" ]; do
+  if [ "$1" == "-g" ]; then
+    IGNORE_USERS=${IGNORE_USERS}${2},
+    shift
+  fi
+  if [ "$1" == "-t" ]; then
+    TIMEOUT=0
+    TIMEOUT_ARG=$2
+    while [ "$TIMEOUT_ARG" -gt 0 ]; do
+      if [ "$TIMEOUT_ARG" -ge 24 ]; then
+        TIMEOUT_ARG=$(( $TIMEOUT_ARG - 24 ))
+        TIMEOUT=$(( $TIMEOUT + 10000 ))
+      else
+        TIMEOUT_ARG=$(( $TIMEOUT_ARG - 1 ))
+        TIMEOUT=$(( $TIMEOUT + 100 ))
+      fi
+    done
+    TIMEOUT_ARG=$2
+    shift
+  fi
+  shift
+done
+
+set -- $PARAMS
+
+if [ "$USER" != "root" ] && [ "$IGNORE_USERS" == "," ]; then
+  IGNORE_USERS=${IGNORE_USERS}${USER},
+fi
+
+
+if [ $CONFIRM -eq 1 ] && [ $DISABLE_CONFIRM -eq 0 ]; then
+  MESSAGE="Asking interactively for confirmation of command payload..."
+  [ $NOISE_LEVEL -ge 3 ] && echo $MESSAGE | tee -a $PIDFILE
+  echo -e "Command payload to run will be: \n${PAYLOAD}"
+  read -p "Is this ok? [Y/n]: " REPLY
+  if [ "$REPLY" != "Y" ] && [ "$REPLY" != "y" ]; then
+    MESSAGE="Interactive confirmation of command payload was rejected by user"
+    [ $NOISE_LEVEL -ge 2 ] && echo $MESSAGE | tee -a $PIDFILE
+    exit 1
+  fi
+  MESSAGE="Interactive confirmation of command payload was accepted by user"
+  [ $NOISE_LEVEL -ge 3 ] && echo $MESSAGE | tee -a $PIDFILE
+fi
+
+# Daemonizer code block starts here
+if [ $DAEMONIZE -eq 1 ]; then
+  MESSAGE="Creating detached `basename $0` process."
+  [ $DEADLINE -eq 1 ] && MESSAGE="$MESSAGE Waiting process will force execution in $TIMEOUT_ARG hours." || \
+    MESSAGE="$MESSAGE Waiting process will abort if not executed in $TIMEOUT_ARG hours."
+  [ $NOISE_LEVEL -ge 2 ] && echo $MESSAGE | tee -a $PIDFILE
+  $0 -I -C $* &
+  exit 0
+fi
+
+# Code below should only be run by the daemon, or interactively with -I
+
+[ -d $PIDFILE_DIR ] || mkdir -p -m 1777 $PIDFILE_DIR
+PIDFILE=${PIDFILE_DIR}/$$.running
+INIT=`date +%e%H%M`
+EXPIRY=$(( $INIT + $TIMEOUT ))
+
+trap "" SIGHUP
+trap sig_handler SIGINT SIGQUIT SIGABRT SIGTERM
+
+echo "$PAYLOAD" > $PIDFILE
+echo -e "\nPROCESS LOG:" >> $PIDFILE
+
+if [ "$DUMP_STATE" -eq 1 ]; then
+  set | tee -a $PIDFILE
+  exit -1
+fi
+
+until detect_users; do
+  USERCOUNT=$?
+  [ $NOISE_LEVEL -ge 4 ] && echo "$USERCOUNT users detected. Sleeping for another 10 seconds." | tee -a $PIDFILE
+  sleep 10
+  if [ "$EXPIRY" -lt `date +%e%H%M` ]; then
+    if [ $DEADLINE -eq 0 ]; then
+      MESSAGE="$0 expired on `hostname` after 24 hours without execution (initialized $INIT)"
+      [ $NOISE_LEVEL -ge 2 ] && echo $MESSAGE | tee -a $PIDFILE
+      [ $NOTIFY -eq 1 ] && irc_notify --color red $MESSAGE
+      mv -b $PIDFILE ${PIDFILE_DIR}/$$.expired
+      exit 1
+    else
+      MESSAGE="$0 forced by deadline on `hostname` after 24 hours (initialized $INIT)"
+      [ $NOISE_LEVEL -ge 2 ] && echo $MESSAGE | tee -a $PIDFILE
+    fi
+  fi
+done
+
+echo -e "\nPAYLOAD EXECUTION:\n" >> $PIDFILE
+eval $PAYLOAD &>> $PIDFILE
+RETVAL=$?
+MESSAGE="`basename $0` executed on `hostname` at `date` (command: ${PAYLOAD}, returned ${RETVAL})"
+[ $NOTIFY -eq 1 ] && irc_notify --color green $MESSAGE
+[ $NOISE_LEVEL -ge 1 ] && echo $MESSAGE | tee -a $PIDFILE
+mv -b $PIDFILE ${PIDFILE_DIR}/$$.complete
+exit 0
