@@ -25,7 +25,7 @@ shy [-qiInvchdl] [-g \<user[,user...]\>] [-t timeout] [--] command
 *increase verbosity level (maximum 4)*  
 -i ~ ignore-idle  
 *disregard logged-in users who have not been active in the last 24 hours*  
--I ~ interactive  
+-I ~ interactive  *this is a capital i*  
 *don't spawn a detached shy process, instead block calling terminal until execution*  
 -c ~ confirm  
 *prompt for confirmation of the payload to be executed as interpreted before going into wait*  
@@ -39,7 +39,7 @@ shy [-qiInvchdl] [-g \<user[,user...]\>] [-t timeout] [--] command
 *timeout duration (in hours, default 24)*  
 -- ~ end-of-flags  
 *stop parsing flags, and begin command payload*  
--l ~ list  
+-l ~ list  *this is a lowercase L*  
 *don't execute a command, instead list currently waiting shy commands*  
 -h ~ help  
 *print this text*
